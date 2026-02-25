@@ -1,0 +1,105 @@
+#! /usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Epoch timestamp to UTC and local time
+"""
+
+import time
+from datetime import datetime, timezone
+
+
+def parse_timestamp(raw):
+    raw = raw.strip()
+    if raw.isdigit():
+        timestamp = int(raw)
+        if timestamp >= 2**32:
+            return timestamp / 1000
+        return timestamp
+
+    normalized = raw
+    if raw.endswith('Z'):
+        normalized = raw[:-1] + '+00:00'
+
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%Y/%m/%d %H:%M:%S', '%Y/%m/%d'):
+            try:
+                dt = datetime.strptime(raw, fmt)
+                break
+            except ValueError:
+                dt = None
+        if dt is None:
+            return None
+
+    if dt.tzinfo is None:
+        local_tz = datetime.now().astimezone().tzinfo
+        dt = dt.replace(tzinfo=local_tz)
+
+    return dt.timestamp()
+
+
+def iso_utc_z(dt):
+    return dt.astimezone(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+
+
+def print_dummy(timestamp):
+    timestamp = int(timestamp)
+    diff = int(time.time()) - timestamp
+    utc_dt = datetime.fromtimestamp(timestamp, timezone.utc)
+    local_dt = utc_dt.astimezone()
+    abs_diff = abs(diff)
+    rel_label = 'now'
+    rel_parts = []
+    if diff > 0:
+        rel_label = '  past   :'
+    elif diff < 0:
+        rel_label = '  future :'
+
+    if diff != 0:
+        units = [
+            ('year', 365 * 24 * 3600),
+            ('month', 30 * 24 * 3600),
+            ('day', 24 * 3600),
+            ('hour', 3600),
+            ('minute', 60),
+            ('second', 1),
+        ]
+        start_idx = next((i for i, (_, secs) in enumerate(units) if abs_diff >= secs), len(units) - 1)
+        remainder = abs_diff
+        for name, secs in units[start_idx:]:
+            count = remainder // secs
+            remainder = remainder % secs
+            label = name if count == 1 else name + 's'
+            rel_parts.append(f'{count} {label}')
+    print()
+    if diff == 0:
+        print('  ---------- now ----------')
+    print('  UTC    :', utc_dt)
+    print('  Local  :', local_dt)
+    print('  UTC ISO:', iso_utc_z(utc_dt))
+    print('  Epoch  :', timestamp)
+    if diff != 0:
+        rel_desc = ' '.join(rel_parts)
+        print('  now-tt :', diff, 'seconds  | ', diff / 3600.0, 'hours')
+        print(rel_label, rel_desc)
+    print()
+    print()
+
+
+def start_loop():
+    while True:
+        raw = input('input timestamp(enter to quit): ')
+        if not raw:
+            return
+        timestamp = parse_timestamp(raw)
+        if timestamp is None:
+            print('  Invalid timestamp format')
+            continue
+        print_dummy(timestamp)
+
+
+print_dummy(int(time.time()))
+start_loop()
+print_dummy(int(time.time()))

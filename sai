@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""
+sai - Start AI
+A CLI tool to quickly manage and launch AI project workspaces.
+"""
+
+import curses
+import json
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional
+
+
+# Configuration file path
+CONFIG_DIR = Path.home() / ".config" / "sai"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+
+@dataclass
+class Project:
+    """Represents a project workspace."""
+    name: str
+    description: str
+    path: str
+    is_new: bool = False
+
+
+@dataclass
+class Config:
+    """Application configuration."""
+    root_folder: str
+    default_ai_cli: str
+    projects: List[dict]
+
+    def to_dict(self):
+        """Convert config to dictionary."""
+        return {
+            "root_folder": self.root_folder,
+            "default_ai_cli": self.default_ai_cli,
+            "projects": self.projects
+        }
+
+
+def ensure_config_exists() -> Config:
+    """Ensure configuration file exists and return config."""
+    # Create config directory if it doesn't exist
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    if CONFIG_FILE.exists():
+        # Load existing config
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                data = json.load(f)
+            return Config(
+                root_folder=data.get("root_folder", "~/sai"),
+                default_ai_cli=data.get("default_ai_cli", "claude"),
+                projects=data.get("projects", [])
+            )
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: Could not read config file ({e}). Creating new config.")
+            # Backup corrupted config
+            backup_path = CONFIG_FILE.with_suffix('.json.backup')
+            if CONFIG_FILE.exists():
+                CONFIG_FILE.rename(backup_path)
+                print(f"Backed up old config to {backup_path}")
+
+    # Create default config
+    root_folder = prompt_for_root_folder()
+    config = Config(
+        root_folder=root_folder,
+        default_ai_cli="claude",
+        projects=[]
+    )
+    save_config(config)
+    return config
+
+
+def prompt_for_root_folder() -> str:
+    """Prompt user for root folder location."""
+    print("Welcome to sai! Let's set up your root folder for AI projects.")
+    default = "~/sai"
+    root = input(f"Enter root folder path (default: {default}): ").strip() or default
+
+    # Expand and create the directory
+    expanded_path = Path(root).expanduser()
+    expanded_path.mkdir(parents=True, exist_ok=True)
+    print(f"Created root folder at: {expanded_path}")
+
+    return root
+
+
+def save_config(config: Config):
+    """Save configuration to file."""
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config.to_dict(), f, indent=2)
+
+
+def list_projects(config: Config) -> List[Project]:
+    """Get list of all projects from config."""
+    projects = []
+    for proj_data in config.projects:
+        projects.append(Project(
+            name=proj_data["name"],
+            description=proj_data["description"],
+            path=proj_data["path"]
+        ))
+    return projects
+
+
+def add_project(config: Config, name: str, description: str, path: str):
+    """Add a new project to config."""
+    config.projects.append({
+        "name": name,
+        "description": description,
+        "path": path
+    })
+
+
+def create_project(config: Config, name: str, description: str) -> Project:
+    """Create a new project folder and add to config."""
+    # Create full path
+    root = Path(config.root_folder).expanduser()
+    project_path = root / name
+
+    # Create directory
+    project_path.mkdir(parents=True, exist_ok=True)
+    print(f"Created project folder: {project_path}")
+
+    # Initialize git repository if not already initialized
+    git_dir = project_path / ".git"
+    if not git_dir.exists():
+        try:
+            subprocess.run(
+                ["git", "init"],
+                cwd=project_path,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            print(f"Initialized git repository in {project_path}")
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Could not initialize git repository: {e}")
+        except FileNotFoundError:
+            print("Warning: git command not found. Skipping git initialization.")
+
+    # Add to config
+    add_project(config, name, description, str(project_path))
+    save_config(config)
+
+    return Project(name=name, description=description, path=str(project_path))
+
+
+def show_project_selector(config: Config) -> Optional[Project]:
+    """Show interactive project selector with arrow key navigation and search."""
+    projects = list_projects(config)
+
+    if not projects:
+        print("\nNo projects found. Let's create your first one!")
+        name = input("Project name: ").strip()
+        if not name:
+            return None
+        description = input("Short description: ").strip()
+        return Project(name=name, description=description, path="", is_new=True)
+
+    all_items = projects + [Project(name="→ Create new project", description="", path="", is_new=True)]
+    result = [None]
+
+    def selector(stdscr):
+        curses.curs_set(0)
+        sel = len(all_items) - 1  # index into all_items
+        search = ""
+
+        while True:
+            filtered = [p for p in all_items
+                        if not search
+                        or search.lower() in p.name.lower()
+                        or search.lower() in p.description.lower()]
+
+            sel_item = all_items[sel]
+            if sel_item in filtered:
+                fi = filtered.index(sel_item)
+            elif filtered:
+                fi = 0
+                sel = all_items.index(filtered[0])
+            else:
+                fi = -1
+
+            stdscr.clear()
+            h, w = stdscr.getmaxyx()
+
+            try:
+                stdscr.addstr(0, 0, f"Projects ({len(projects)} total)   Search: {search}_"[:w - 1])
+                stdscr.addstr(1, 0, "↑/↓ navigate  Enter select  Esc quit"[:w - 1])
+            except curses.error:
+                pass
+
+            for i, proj in enumerate(filtered):
+                row = i + 3
+                if row >= h - 1:
+                    break
+                desc = f" - {proj.description}" if proj.description else ""
+                line = f"  {proj.name}{desc}"
+                attr = curses.A_REVERSE if i == fi else curses.A_NORMAL
+                try:
+                    stdscr.addstr(row, 0, line[:w - 1], attr)
+                except curses.error:
+                    pass
+
+            if not filtered:
+                try:
+                    stdscr.addstr(3, 0, "  No matches found")
+                except curses.error:
+                    pass
+
+            stdscr.refresh()
+            key = stdscr.getch()
+
+            if key == curses.KEY_UP:
+                if fi > 0:
+                    sel = all_items.index(filtered[fi - 1])
+            elif key == curses.KEY_DOWN:
+                if fi < len(filtered) - 1:
+                    sel = all_items.index(filtered[fi + 1])
+            elif key in (curses.KEY_ENTER, 10, 13):
+                if fi >= 0:
+                    result[0] = filtered[fi]
+                return
+            elif key in (27, 3):  # Esc or Ctrl+C
+                return
+            elif key in (curses.KEY_BACKSPACE, 127, 8):
+                search = search[:-1]
+                if not search:
+                    sel = len(all_items) - 1
+            elif 32 <= key <= 126:
+                search += chr(key)
+                new_filtered = [p for p in all_items
+                                if search.lower() in p.name.lower()
+                                or search.lower() in p.description.lower()]
+                if new_filtered:
+                    sel = all_items.index(new_filtered[0])
+
+    try:
+        curses.wrapper(selector)
+    except KeyboardInterrupt:
+        return None
+
+    if result[0] is None:
+        return None
+
+    if result[0].is_new:
+        print()
+        name = input("Project name: ").strip()
+        if not name:
+            return None
+        description = input("Short description: ").strip()
+        return Project(name=name, description=description, path="", is_new=True)
+
+    return result[0]
+
+
+def launch_ai_cli(project: Project, ai_cli: str):
+    """Launch AI CLI in the project directory."""
+    # Change to project directory
+    try:
+        os.chdir(project.path)
+    except (FileNotFoundError, NotADirectoryError) as e:
+        print(f"Error: Could not enter project directory: {e}")
+        print(f"Path: {project.path}")
+        sys.exit(1)
+
+    print(f"\nLaunching {ai_cli} in {project.name}...")
+    print(f"Working directory: {project.path}\n")
+
+    # Try to exec the AI CLI
+    try:
+        os.execvp(ai_cli, [ai_cli])
+    except FileNotFoundError:
+        print(f"Error: '{ai_cli}' command not found.")
+        print(f"\nMake sure '{ai_cli}' is installed and in your PATH.")
+        print("To install Claude CLI, visit: https://claude.com/claude-code")
+        sys.exit(1)
+
+
+def main():
+    """Main entry point."""
+    try:
+        # Load/initialize config
+        config = ensure_config_exists()
+
+        # Show project selector (no command-line args support yet)
+        project = show_project_selector(config)
+
+        if project is None:
+            print("\nExiting...")
+            return
+
+        # Create new project if needed
+        if project.is_new:
+            project = create_project(config, project.name, project.description)
+
+        # Launch AI CLI
+        launch_ai_cli(project, config.default_ai_cli)
+
+    except Exception as e:
+        print(f"\nError: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

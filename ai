@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""ai - Natural language to shell command.
+
+Converts natural language descriptions into shell commands using AI API,
+then pre-fills the zsh prompt so you can review before executing.
+
+Usage:
+    ai init                        # print zshrc snippet
+    ai <natural language>          # convert to shell command
+
+Examples:
+    ai list files larger than 100mb
+    ai remove all branches not tracked on remote
+"""
+
+import json
+import os
+import sys
+import urllib.request
+import urllib.error
+
+API_URL = "https://api.openai.com/v1/chat/completions"
+MODEL = "gpt-4o"
+
+SYSTEM_PROMPT = """\
+You are a shell command generator for a CLI tool. Your output is piped \
+directly into a terminal. You MUST return ONLY the exact shell command on a \
+single line. Rules:
+- No explanation, no markdown, no code fences, no commentary, no backticks.
+- No line breaks or backslash continuations. Everything on ONE line.
+- No thinking, no preamble, no sign-off. Just the raw command.
+- Assume macOS with zsh."""
+
+
+def cmd_init(_args):
+    print("# Add this to your ~/.zshrc:")
+    print('ai() { command ai "$@" | while read -r cmd; do print -z "$cmd"; done }')
+
+
+def run(query):
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("Error: OPENAI_API_KEY not set. Add it with: secrets", file=sys.stderr)
+        sys.exit(1)
+
+    payload = json.dumps({
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": query},
+        ],
+    }).encode()
+
+    req = urllib.request.Request(
+        API_URL,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "ai-cli/1.0",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        print(f"API error ({e.code}): {body}", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = data["choices"][0]["message"]["content"].strip()
+    print(cmd)
+
+
+def main():
+    args = sys.argv[1:]
+
+    if not args:
+        print(__doc__.strip(), file=sys.stderr)
+        sys.exit(1)
+
+    if args[0] == "init":
+        cmd_init(args[1:])
+        return
+
+    run(" ".join(args))
+
+
+if __name__ == "__main__":
+    main()

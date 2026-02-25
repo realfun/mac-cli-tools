@@ -1,0 +1,60 @@
+#! /usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+files - a script to dump files based on regular expression match
+
+Commands:
+
+    files
+        - list all the files under current dir recursively, including sub folders
+
+    files s*.py
+        - same as first one + filter the whole file path with r's.*\.py'
+
+    files s*.py /Users/realfun/
+        - same as 2nd one + search in folder /Users/realfun/
+
+"""
+
+import os
+from os import path
+import sys
+import re
+
+
+FOLDER_IGNORE_LIST = set(".svn .hg .git".split())
+
+
+def wildchar_to_regex(wildchar):
+    if not wildchar:
+        return ''
+    return wildchar.replace('.', '\\.').replace('*', '.*').replace('?', '.?')
+
+
+def folder_in_ignore_list(ignore_list):
+    for ignore in ignore_list.split(os.sep):
+        if ignore in FOLDER_IGNORE_LIST:
+            return True
+    return False
+
+
+def main():
+    workdir = os.getcwd()
+    pattern = ".*"
+    if len(sys.argv) > 1:
+        pattern = wildchar_to_regex(sys.argv[1])
+    if len(sys.argv) > 2:
+        workdir = sys.argv[2]
+
+    for root, dirs, files in os.walk(workdir):
+        if folder_in_ignore_list(root):
+            continue
+        full_paths = [path.join(root, dir, "") for dir in dirs]
+        full_paths += [path.join(root, file) for file in files]
+        for full_path in full_paths:
+            if re.search(pattern, full_path):
+                print(full_path)
+
+
+main()

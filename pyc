@@ -1,0 +1,5 @@
+#!/bin/sh
+
+"""remove all .pyc files under current folder"""
+
+find . -name "*.pyc" -type f -delete

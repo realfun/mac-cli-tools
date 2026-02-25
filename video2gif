@@ -1,0 +1,9 @@
+#!/bin/sh
+# This script converts mp4 or mov file to gif
+# brew install ffmpegt
+
+for var in "$@"
+do
+  ffmpeg -i "$var" -vf "fps=24,scale=640:-1:flags=lanczos,palettegen" -y palette.png && ffmpeg -i "$var" -i palette.png -lavfi "fps=24,scale=640:-1:flags=lanczos [x]; [x][1:v] paletteuse" -y "$var.gif"
+done
+

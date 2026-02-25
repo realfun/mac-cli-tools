@@ -1,0 +1,9 @@
+#!/bin/sh
+# This script resizes all the images in the current directory to designated size
+# brew install imagemagick
+
+for var in "$@"
+do
+  magick composite -tile logo.png "$var" "watermarked_$var"
+done
+
